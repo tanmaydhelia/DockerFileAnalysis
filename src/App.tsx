@@ -1,7 +1,17 @@
 import React, { useState, useCallback } from 'react';
-import { Upload, FileText, Zap, Clock, Download, Github, Twitter, Mail, Container, Package, Wifi } from 'lucide-react';
+import { Upload, FileText, Zap, Clock, Download, Github, Twitter, Mail, Container, Package, Wifi, Timer, Settings } from 'lucide-react';
 import { ThemeToggle } from './components/ThemeToggle';
-import { analyzeDockerfile, analyzeRequirements, DockerStep, RequirementInfo } from './services/geminiService';
+import { ComputeCapabilitiesForm } from './components/ComputeCapabilitiesForm';
+import { CompilationAnalysis } from './components/CompilationAnalysis';
+import { 
+  analyzeDockerfile, 
+  analyzeRequirements, 
+  analyzeCompilationTime,
+  DockerStep, 
+  RequirementInfo, 
+  ComputeCapabilities,
+  CompilationAnalysis as CompilationAnalysisType
+} from './services/geminiService';
 
 interface AnalysisResults {
   dockerSteps?: DockerStep[];
@@ -9,6 +19,7 @@ interface AnalysisResults {
   totalSize?: string;
   internetSpeed?: number;
   estimatedTime?: string;
+  compilationAnalysis?: CompilationAnalysisType;
 }
 
 const App: React.FC = () => {
@@ -16,8 +27,16 @@ const App: React.FC = () => {
   const [requirementsFile, setRequirementsFile] = useState<File | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isTestingSpeed, setIsTestingSpeed] = useState(false);
+  const [isAnalyzingCompilation, setIsAnalyzingCompilation] = useState(false);
   const [results, setResults] = useState<AnalysisResults>({});
   const [dragOver, setDragOver] = useState<string | null>(null);
+  const [showComputeForm, setShowComputeForm] = useState(false);
+  const [computeCapabilities, setComputeCapabilities] = useState<ComputeCapabilities>({
+    cpu: 'medium',
+    memory: 'medium',
+    architecture: 'x86_64',
+    environment: 'local'
+  });
 
   const handleDragOver = useCallback((e: React.DragEvent, type: string) => {
     e.preventDefault();
@@ -81,6 +100,29 @@ const App: React.FC = () => {
       console.error('Analysis error:', error);
     } finally {
       setIsAnalyzing(false);
+    }
+  };
+
+  const analyzeCompilation = async () => {
+    if (!dockerFile && !requirementsFile) return;
+    
+    setIsAnalyzingCompilation(true);
+    
+    try {
+      const dockerContent = dockerFile ? await dockerFile.text() : '';
+      const requirementsContent = requirementsFile ? await requirementsFile.text() : '';
+      
+      const compilationAnalysis = await analyzeCompilationTime(
+        dockerContent,
+        requirementsContent,
+        computeCapabilities
+      );
+      
+      setResults(prev => ({ ...prev, compilationAnalysis }));
+    } catch (error) {
+      console.error('Compilation analysis error:', error);
+    } finally {
+      setIsAnalyzingCompilation(false);
     }
   };
 
@@ -223,8 +265,8 @@ const App: React.FC = () => {
             Analyze Your Docker Configuration
           </h2>
           <p className="text-xl text-gray-600 dark:text-gray-400 max-w-3xl mx-auto">
-            Upload your Dockerfile and requirements.txt to get detailed analysis, size estimates, 
-            and download time predictions based on your internet speed.
+            Upload your Dockerfile and requirements.txt to get detailed analysis, size estimates,
+            compilation time predictions, and optimization recommendations based on your compute capabilities.
           </p>
         </div>
 
@@ -253,7 +295,7 @@ const App: React.FC = () => {
         </div>
 
         {/* Action Buttons */}
-        <div className="flex flex-col sm:flex-row gap-4 justify-center mb-12">
+        <div className="flex flex-col sm:flex-row gap-4 justify-center mb-8">
           <button
             onClick={analyzeFiles}
             disabled={(!dockerFile && !requirementsFile) || isAnalyzing}
@@ -289,14 +331,56 @@ const App: React.FC = () => {
               </>
             )}
           </button>
+          
+          <button
+            onClick={() => setShowComputeForm(!showComputeForm)}
+            className="flex items-center justify-center px-8 py-3 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-semibold transition-all duration-200 transform hover:scale-105"
+          >
+            <Settings className="w-5 h-5 mr-2" />
+            Compute Settings
+          </button>
         </div>
 
+        {/* Compute Capabilities Form */}
+        {showComputeForm && (
+          <div className="mb-8 animate-fade-in">
+            <ComputeCapabilitiesForm
+              capabilities={computeCapabilities}
+              onChange={setComputeCapabilities}
+            />
+            <div className="flex justify-center mt-6">
+              <button
+                onClick={analyzeCompilation}
+                disabled={(!dockerFile && !requirementsFile) || isAnalyzingCompilation}
+                className="flex items-center justify-center px-8 py-3 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-400 text-white rounded-lg font-semibold transition-all duration-200 transform hover:scale-105 disabled:hover:scale-100 disabled:cursor-not-allowed"
+              >
+                {isAnalyzingCompilation ? (
+                  <>
+                    <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
+                    Analyzing Compilation...
+                  </>
+                ) : (
+                  <>
+                    <Timer className="w-5 h-5 mr-2" />
+                    Analyze Compilation Time
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Results Section */}
-        {(results.dockerSteps || results.requirements || results.internetSpeed) && (
+        {(results.dockerSteps || results.requirements || results.internetSpeed || results.compilationAnalysis) && (
           <div className="space-y-8 animate-fade-in">
             <h3 className="text-2xl font-bold text-gray-900 dark:text-white text-center mb-8">
               Analysis Results
             </h3>
+
+            {/* Compilation Analysis - Full Width */}
+            {results.compilationAnalysis && (
+              <CompilationAnalysis analysis={results.compilationAnalysis} />
+            )}
 
             <div className="grid lg:grid-cols-3 gap-8">
               {/* Docker Analysis */}
@@ -331,6 +415,23 @@ const App: React.FC = () => {
                               <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
                                 <strong>Impact:</strong> {step.impact}
                               </p>
+                              {step.compilationTime && (
+                                <div className="flex items-center justify-between mt-2">
+                                  <span className="text-xs text-gray-500 dark:text-gray-400">
+                                    <strong>Build Time:</strong> {step.compilationTime}
+                                  </span>
+                                  {step.computeIntensity && (
+                                    <span className={`text-xs px-2 py-1 rounded-full ${
+                                      step.computeIntensity === 'extreme' ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300' :
+                                      step.computeIntensity === 'high' ? 'bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300' :
+                                      step.computeIntensity === 'medium' ? 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300' :
+                                      'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300'
+                                    }`}>
+                                      {step.computeIntensity} intensity
+                                    </span>
+                                  )}
+                                </div>
+                              )}
                             </div>
                           </div>
                         </div>
@@ -372,6 +473,18 @@ const App: React.FC = () => {
                             <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
                               {req.description}
                             </p>
+                            {req.compilationRequired && (
+                              <div className="flex items-center mt-2 space-x-2">
+                                <span className="text-xs bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300 px-2 py-1 rounded">
+                                  Requires Compilation
+                                </span>
+                                {req.buildTime && (
+                                  <span className="text-xs text-gray-500 dark:text-gray-400">
+                                    Build: {req.buildTime}
+                                  </span>
+                                )}
+                              </div>
+                            )}
                           </div>
                           <span className="text-sm font-semibold text-secondary-600 dark:text-secondary-400 ml-4">
                             {req.estimatedSize}
